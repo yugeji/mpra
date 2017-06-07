@@ -1,0 +1,873 @@
+from __future__ import absolute_import, division, print_function
+from keras.models import Sequential
+from keras.callbacks import EarlyStopping
+from keras.layers.core import (
+    Activation, Dense, Dropout, Flatten,
+    Permute, Reshape, TimeDistributedDense
+)
+from keras.layers.convolutional import Convolution2D, MaxPooling2D
+from keras.layers.recurrent import GRU
+from keras.regularizers import l1, l2, l1l2
+from keras.utils import np_utils
+from keras import backend as K
+import numpy as np
+import copy
+import matplotlib.pyplot as plt
+import pandas as pd
+import sys
+import os
+import time
+import re
+import numpy as np
+from collections import OrderedDict
+from sklearn.metrics import auc, log_loss, precision_recall_curve, roc_auc_score
+from prg.prg import create_prg_curve, calc_auprg
+from sklearn.grid_search import ParameterGrid
+from sklearn.model_selection import StratifiedShuffleSplit
+from keras.utils.np_utils import to_categorical
+from keras.layers.normalization import BatchNormalization
+
+#copy paste from Kundaje lab lmao https://github.com/kundajelab/dragonn/blob/master/dragonn/metrics.py
+
+class ClassificationResult(object):
+    def __init__(self, labels, predictions, name=None):
+        self.predictions = predictions
+        self.labels = labels
+        self.flat_predictions = predictions.flatten()
+        self.flat_labels = labels.flatten()
+        self.results = []
+
+    def self_binary(self, labels, predictions):
+        self.results = self.binary(self.labels, self.predictions)
+
+    def cat_binary(self, labels, predictions):
+        class1_results = self.binary(self.labels[:,0].astype(bool), self.predictions[:,0])
+        class2_results = self.binary(self.labels[:,1].astype(bool), self.predictions[:,1])
+        class3_results = self.binary(self.labels[:,2].astype(bool), self.predictions[:,2])
+        print("Class 1 Performance\n" + self.convert_to_str(class1_results))
+        print("Class 2 Performance\n" + self.convert_to_str(class2_results))
+        print("Class 3 Performance\n" + self.convert_to_str(class3_results))
+
+
+    def binary(self, labels, predictions):
+        def loss(labels, predictions):
+            return log_loss(labels, predictions)
+
+
+        def positive_accuracy(labels, predictions, threshold=0.5):
+            return 100 * (predictions[labels] > threshold).mean()
+
+
+        def negative_accuracy(labels, predictions, threshold=0.5):
+            return 100 * (predictions[~labels] < threshold).mean()
+
+
+        def balanced_accuracy(labels, predictions, threshold=0.5):
+            return (positive_accuracy(labels, predictions, threshold) +
+                    negative_accuracy(labels, predictions, threshold)) / 2
+
+
+        def auROC(labels, predictions):
+            return roc_auc_score(labels, predictions)
+
+
+        def auPRC(labels, predictions):
+            precision, recall = precision_recall_curve(labels, predictions)[:2]
+            return auc(recall, precision)
+
+
+        def auPRG(labels, predictions):
+            return calc_auprg(create_prg_curve(labels, predictions))
+
+
+        def recall_at_precision_threshold(labels, predictions, precision_threshold):
+            precision, recall = precision_recall_curve(labels, predictions)[:2]
+            return 100 * recall[np.searchsorted(precision - precision_threshold, 0)]
+
+        results = [
+            ('Loss', loss(labels, predictions)),
+            ('Balanced_accuracy', balanced_accuracy(
+                labels, predictions)),
+            ('auROC', auROC(labels, predictions)),
+            ('auPRC', auPRC(labels, predictions)),
+            ('auPRG', auPRG(labels, predictions)),
+            ('Recall_at_5%_FDR', recall_at_precision_threshold(
+                labels, predictions, 0.95)),
+            ('Recall_at_10%_FDR', recall_at_precision_threshold(
+                labels, predictions, 0.9)),
+            ('Recall_at_20%_FDR', recall_at_precision_threshold(
+                labels, predictions, 0.8)),
+            ('Num_Positives', labels.sum()),
+            ('Num_Negatives', (1 - labels).sum())]
+        return results
+
+    def continuous(self):
+        mse = self.MSE()
+        ase = self.ASE()
+        self.results = [('MSE', mse), ('ASE', ase)]
+
+    def MSE(self):
+        return np.mean((self.flat_predictions - self.flat_labels)**2)
+
+    def ASE(self):
+        return np.mean(np.abs(self.flat_predictions - self.flat_labels))
+
+    def __str__(self):
+        strs = []
+        for idx, (key, val) in enumerate(self.results):
+            _str = "%0.04f"%(val)
+            strs.append(_str)
+        return "\t".join(strs)
+
+    def convert_to_str(self, results):
+        strs = []
+        for idx, (key, val) in enumerate(results):
+            _str = "%0.04f"%(val)
+            strs.append(_str)
+        return "\t".join(strs)
+
+    def __getitem__(self, item):
+        return np.array([task_results[item] for task_results in self.results])
+
+
+#end copy + paste
+class Mutagen(object):
+    def __init__(self, ref_file, alt_file, prob_file, sig_file):
+        self.ref_file = ref_file
+        self.alt_file = alt_file
+        self.prob_file = prob_file
+        self.sig_file = sig_file
+
+    def prepare(self):
+        self.prep_sig()
+        self.process_dna()
+
+    def process_dna(self):
+        self.ref_tensor = self.prep_dna(self.ref_file, self.N)
+        self.alt_tensor = self.prep_dna(self.alt_file, self.N)
+
+
+    def prep_sig(self):
+        self.sig_df = pd.read_csv(self.sig_file, sep = "\t", header = None)
+        self.Z = self.sig_df[0]
+        self.N = len(self.sig_df[0])
+
+    def prep_dna(self, dna_file, N):
+        idx = 0
+        dna_tensor = np.zeros((N, 1, 4, 150))
+        f = open(dna_file, 'r')
+        for line in f:
+            split_line = line.rstrip().split()
+            _N, _W = divmod(idx, 4)
+            dna_tensor[_N, 0, _W, :] = np.asarray(split_line, dtype = int)
+            idx += 1
+        return dna_tensor
+
+    def mutate_loc(self, indices, mutate_to):
+        #indices - all spots to be mutated
+        self.mutated_tensor = self.inital_obj.dna_tensor[indices,:,:,:]
+        self.labels = self.inital_obj.tar_vec[indices]
+        self.pre_mutation_tensor = copy.deepcopy(self.mutated_tensor)
+        for idx, (val, new) in enumerate(mutate_to):
+            self.mutated_tensor[idx, :, :, val] = new
+
+    def predict(self):
+        pass
+
+
+class Initalizer(object):
+    def __init__(self, dna_file, target_file, anno_file, output_dir, name):
+        self.dna_file = dna_file
+        self.target_file = target_file
+        self.anno_file = anno_file
+        self.output_dir = output_dir
+        f = open(self.dna_file, 'r')
+        line = f.readline()
+        split_line = line.rstrip().split()
+        self.W = 4
+        self.H = len(split_line)
+        self.name = name
+        f.close()
+
+    def prepare(self):
+        self.prep_anno()
+        self.prep_dna()
+        self.prep_tar()
+        print("Preparation of input matrices complete")
+
+    def prep_anno(self):
+        self.anno_df = pd.read_csv(self.anno_file, sep = "\t", header = 0)
+        self.N = len(self.anno_df.index)
+
+    def prep_dna(self):
+        idx = 0
+        self.dna_tensor = np.zeros((self.N, 1, self.W, self.H))
+        f = open(self.dna_file, 'r')
+        for line in f:
+            split_line = line.rstrip().split()
+            _N, _W = divmod(idx, 4)
+            self.dna_tensor[_N, 0, _W, :] = np.asarray(split_line, dtype = int)
+            idx += 1
+
+    def prep_tar(self):
+        idx = 0
+        self.tar_vec = np.zeros(self.N)
+        f = open(self.target_file, 'r')
+        for line in f:
+            split_line = line.rstrip().split()
+            self.tar_vec[idx] = int(split_line[0])
+            idx += 1
+
+    def find_chr_index(self, chrom):
+        indices = []
+        for idx, val in enumerate(list(self.anno_df.iloc[:,0])):
+            if val == chrom:
+                indices.append(idx)
+        return indices
+
+    def mask(self, indices):
+        mask = np.ones(self.N, dtype = bool)
+        mask[indices,] = False
+        test_tensor = self.dna_tensor[indices, :, :]
+        train_tensor = self.dna_tensor[mask, :, :]
+        test_tar = self.tar_vec[indices]
+        train_tar = self.tar_vec[mask]
+        return train_tensor, test_tensor, train_tar, test_tar
+
+    def split_chrom(self, chrom):
+        indices = self.find_chr_index(chrom)
+        train_tensor, test_tensor, train_tar, test_tar = self.mask(indices)
+        return Data(train_tensor, test_tensor, train_tar, test_tar, chrom, indices, self)
+
+class Data(object):
+    def __init__(self, train_tensor, test_tensor, train_tar, test_tar, chrom, indices, initalObj):
+        self.train_tensor = train_tensor
+        self.test_tensor = test_tensor
+        self.train_tar = train_tar
+        self.test_tar = test_tar
+        self.chrom = chrom
+        self.indices = indices
+        self.initalObj = initalObj
+        self.N_train = self.train_tensor.shape[0]
+        self.N_test = self.test_tensor.shape[0]
+        self.seq_length = self.initalObj.H
+        self.name = self.initalObj.name
+
+class TanhModel(object):
+    #some copy and paste from dragonn @ https://github.com/kundajelab/dragonn/blob/master/dragonn/models.py
+    def __init__(self, verbose = 0, seq_length = 150, name = ""):
+        self.verbose = verbose
+        self.seq_length = seq_length
+        self.input_shape = (1,4,self.seq_length)
+        self.name = ""
+
+    def model(self, num_filters=(20, 10, 10), conv_width=(20, 10, 10),
+                pool_width=20, L1=0.01, L2 = 0.01, dropout=0.001, GRU_size=35, TDD_size=15, use_RNN = False):
+        self.seq_length = self.seq_length
+        self.input_shape = (1,4, self.seq_length)
+        self.num_tasks = 1
+        self.model = Sequential()
+        self.num_filters = num_filters
+        self.conv_width = conv_width
+        assert len(num_filters) == len(conv_width)
+        for i, (nb_filter, nb_col) in enumerate(zip(num_filters, conv_width)):
+            conv_height = 4 if i == 0 else 1
+            self.model.add(Convolution2D(
+                nb_filter=nb_filter, nb_row=conv_height,
+                nb_col=nb_col, activation='linear',
+                init='he_normal', input_shape=self.input_shape,
+                W_regularizer=l1l2(L1,L2), b_regularizer=l1l2(L1,L2)))
+            # self.model.add(Convolution2D(
+            #     nb_filter=nb_filter, nb_row=conv_height,
+            #     nb_col=nb_col, activation='linear',
+            #     init='he_normal', input_shape=self.input_shape,
+            #     W_regularizer=l1(L1), b_regularizer=l1(L1)))
+            self.model.add(Activation('tanh'))
+            self.model.add(Dropout(dropout))
+        self.model.add(MaxPooling2D(pool_size=(1, pool_width)))
+        if use_RNN:
+            num_max_pool_outputs = self.model.layers[-1].output_shape[-1]
+            self.model.add(Reshape((num_filters[-1], num_max_pool_outputs)))
+            self.model.add(Permute((2, 1)))
+            self.model.add(GRU(GRU_size, return_sequences=True))
+            self.model.add(TimeDistributedDense(TDD_size, activation='tanh'))
+        self.model.add(Flatten())
+        self.model.add(Dense(output_dim=1))
+        self.model.add(Activation('tanh'))
+        self.model.compile(optimizer='adam', loss='mse')
+
+
+    def train(self, X, y, sample_weights, batch_size = 60, num_epochs = 100):
+        #minimum do enough epochs to span entire set
+        _num_epochs = int(round(X.shape[0] / float(batch_size)))
+        if _num_epochs > num_epochs:
+            num_epochs = _num_epochs
+        num_positives = y.sum()
+        num_sequences = len(y)
+        num_negatives = num_sequences - num_positives
+        self.num_epochs = num_epochs
+        self.model.fit(X, y, batch_size=batch_size, nb_epoch = num_epochs, verbose = self.verbose, sample_weight = sample_weights)
+
+
+    def get_sequence_filters(self):
+        """
+        Returns 3D array of 2D sequence filters.
+        """
+        return self.model.layers[0].get_weights()[0].squeeze(axis=1)
+
+    def predict(self, X):
+        return self.model.predict(X, batch_size=128, verbose=False)
+
+    def test(self, X, y):
+        return ClassificationResult(y, self.predict(X))
+
+    def score(self, X, y, metric):
+        return self.test(X, y)[metric]
+class CatModel(object):
+    #some copy and paste from dragonn @ https://github.com/kundajelab/dragonn/blob/master/dragonn/models.py
+    def __init__(self, verbose = 0, seq_length = 150, name = ""):
+        self.verbose = verbose
+        self.seq_length = seq_length
+        self.input_shape = (1,4,self.seq_length)
+        self.name = ""
+
+    def model(self, num_filters=(25, 25, 15), conv_width=(20, 10, 5),
+                pool_width=30, L1=0.01, L2 = 0.01, nb_classes = 3, dropout=0.01, GRU_size=35, TDD_size=15, use_RNN = False):
+        self.seq_length = self.seq_length
+        self.input_shape = (1,4, self.seq_length)
+        self.num_tasks = 1
+        self.model = Sequential()
+        self.num_filters = num_filters
+        self.conv_width = conv_width
+        self.nb_classes = nb_classes
+        assert len(num_filters) == len(conv_width)
+        for i, (nb_filter, nb_col) in enumerate(zip(num_filters, conv_width)):
+            conv_height = 4 if i == 0 else 1
+            self.model.add(Convolution2D(
+                nb_filter=nb_filter, nb_row=conv_height,
+                nb_col=nb_col, activation='linear',
+                init='he_normal', input_shape=self.input_shape,
+                W_regularizer=l1l2(L1,L2), b_regularizer=l1l2(L1,L2)))
+            # self.model.add(Convolution2D(
+            #     nb_filter=nb_filter, nb_row=conv_height,
+            #     nb_col=nb_col, activation='linear',
+            #     init='he_normal', input_shape=self.input_shape,
+            #     W_regularizer=l1(L1), b_regularizer=l1(L1)))
+            self.model.add(Activation('relu'))
+            self.model.add(Dropout(dropout))
+            #self.model.add(MaxPooling2D(pool_size=(1, pool_width)))
+        self.model.add(MaxPooling2D(pool_size=(1, pool_width)))
+        if use_RNN:
+            num_max_pool_outputs = self.model.layers[-1].output_shape[-1]
+            self.model.add(Reshape((num_filters[-1], num_max_pool_outputs)))
+            self.model.add(Permute((2, 1)))
+            self.model.add(GRU(GRU_size, return_sequences=True))
+            self.model.add(TimeDistributedDense(TDD_size, activation='relu'))
+        self.model.add(Flatten())
+        self.model.add(Dense(output_dim=self.nb_classes))
+        self.model.add(Activation('softmax'))
+        self.model.compile(optimizer='adam', loss='categorical_crossentropy')
+
+    def model2(self, num_filters= 400, conv_width = 8, pool_width = 8, L1 = 0.0001, L2 = 0.01, nb_classes = 3, dropout = 0.01):
+        self.seq_length = self.seq_length
+        self.input_shape = (1,4, self.seq_length)
+        self.num_tasks = 1
+        self.model = Sequential()
+        self.num_filters = num_filters
+        self.conv_width = conv_width
+        self.nb_classes = nb_classes
+        self.model.add(Convolution2D(
+                nb_filter=num_filters, nb_row=4,
+                nb_col=conv_width, activation='linear',
+                init='he_normal', input_shape=self.input_shape,
+                W_regularizer=l1l2(L1,L2), b_regularizer=l1l2(L1,L2)))
+        self.model.add(Activation('relu'))
+        self.model.add(BatchNormalization())
+        self.model.add(Dropout(dropout))
+            #self.model.add(MaxPooling2D(pool_size=(1, pool_width)))
+        self.model.add(MaxPooling2D(pool_size=(1, pool_width)))
+        self.model.add(Flatten())
+        self.model.add(Dense(36, W_regularizer=l1l2(L1, L2), b_regularizer=l1l2(L1, L2)))
+        self.model.add(Activation('relu'))
+        self.model.add(BatchNormalization())
+        self.model.add(Dropout(dropout))
+        self.model.add(Dense(output_dim=3))
+        self.model.add(Activation('softmax'))
+        self.model.compile(optimizer='adam', loss='categorical_crossentropy')
+
+    def model3(self, num_filters= 400, conv_width = 8, pool_width = 8, L1 = 0.0001, L2 = 0.01, nb_classes = 1, dropout = 0.01):
+        self.seq_length = self.seq_length
+        self.input_shape = (1,4, self.seq_length)
+        self.num_tasks = 1
+        self.model = Sequential()
+        self.num_filters = num_filters
+        self.conv_width = conv_width
+        self.nb_classes = nb_classes
+        self.model.add(Convolution2D(
+                nb_filter=num_filters, nb_row=4,
+                nb_col=conv_width, activation='linear',
+                init='he_normal', input_shape=self.input_shape,
+                W_regularizer=l1l2(L1,L2), b_regularizer=l1l2(L1,L2)))
+        self.model.add(Activation('relu'))
+        self.model.add(BatchNormalization())
+        self.model.add(Dropout(dropout))
+            #self.model.add(MaxPooling2D(pool_size=(1, pool_width)))
+        self.model.add(MaxPooling2D(pool_size=(1, pool_width)))
+        self.model.add(Flatten())
+        self.model.add(Dense(36, W_regularizer=l1l2(L1, L2), b_regularizer=l1l2(L1, L2)))
+        self.model.add(Activation('relu'))
+        self.model.add(BatchNormalization())
+        self.model.add(Dropout(dropout))
+        self.model.add(Dense(output_dim=1))
+        self.model.add(Activation('sigmoid'))
+        self.model.compile(optimizer='adam', loss='binary_crossentropy')
+
+    def train(self, X, y, neg_weight, neutral_weight, pos_weight, force = 0, batch_size = 200, num_epochs = 30):
+        #minimum do enough epochs to span entire set
+        _num_epochs = int(round(X.shape[0] / float(batch_size)))
+        if force == 1 and _num_epochs > num_epochs:
+            num_epochs = _num_epochs
+        num_positives = y.sum()
+        num_sequences = len(y)
+        num_negatives = num_sequences - num_positives
+        self.num_epochs = num_epochs
+        self.model.fit(X, y, batch_size=batch_size, nb_epoch = num_epochs,verbose = self.verbose, class_weight= {0:neg_weight, 1:neutral_weight, 2:pos_weight})
+
+    def get_sequence_filters(self):
+        """
+        Returns 3D array of 2D sequence filters.
+        """
+        return self.model.layers[0].get_weights()[0].squeeze(axis=1)
+
+    def predict(self, X):
+        return self.model.predict(X, batch_size=128, verbose=self.verbose)
+
+    def test(self, X, y):
+        return ClassificationResult(y, self.predict(X))
+
+    def score(self, X, y, metric):
+        return self.test(X, y)[metric]
+
+def process_result_objs(obj_list, output_file_name):
+    concat_labels = []
+    concat_predictions = []
+    for idx, val in enumerate(obj_list):
+        concat_labels.append(val.labels)
+        concat_predictions.append(val.predictions)
+    concated_labels = np.concatenate(concat_labels)
+    concated_predictions = np.concatenate(concat_predictions)
+    o = open(output_file_name, 'w')
+    for idx, (val1, val2) in enumerate(zip(concated_labels, concated_predictions)):
+        o.write("%i\t%0.05f\n"%(val1, val2))
+    o.close()
+    overall_class_obj = ClassificationResult(concated_labels.astype(bool), concated_predictions)
+    return overall_class_obj
+
+
+class BinaryClassProcessor(object):
+        def __init__(self, dna_files, target_files, anno_files, status, type = "cat"):
+        self.dna_files = dna_files
+        self.target_files = target_files
+        self.anno_files = anno_files
+        self.status = status
+        self.type = "bin"
+        self.process_all_files()
+
+    def return_test_train(self, test_size = 0.2):
+        sss = StratifiedShuffleSplit(n_splits=1, test_size=test_size, random_state=0)
+        if self.type == "tanh":
+            for train_index, test_index in sss.split(self.merged_tensor, self.merged_tensor):
+                X_train, X_test = self.merged_tensor[train_index], self.merged_tensor[test_index]
+                Y_train, Y_test = self.merged_tar[train_index], self.merged_tar[test_index]
+            return X_train, X_test, Y_train, Y_test
+        elif self.type == "bin":
+            self.converted_cat = self.merged_tar
+            for train_index, test_index in sss.split(self.merged_tensor, self.merged_tensor):
+                X_train, X_test = self.merged_tensor[train_index], self.merged_tensor[test_index]
+                Y_train, Y_test = self.converted_cat[train_index], self.converted_cat[test_index]
+            return X_train, X_test, Y_train, Y_test
+
+    def return_train_test_chrom(self, chrom):
+        for chrom in range(1,23):
+            current_chrom = chrom
+            if current_chrom = chrom.
+
+
+    def color_chroms(self):
+        chrom_array = []
+        for idx, val in enumerate(list(self.anno_df.iloc[:,0])):
+            chrom_array.append(val)
+        return chrom_array
+
+    def find_chr_by_color(self, chromlist, chrom):
+        chrom_indices = []
+        other_indices = []
+        for idx, val in enumerate(chromlist):
+            if val == chrom:
+                chrom_indices.append(idx)
+            else:
+                other_indices.append(idx)
+        return chrom_indices, other_indices
+
+
+
+    def find_chr_index(self, chrom):
+        indices = []
+        for idx, val in enumerate(list(self.anno_df.iloc[:,0])):
+            if val == chrom:
+                indices.append(idx)
+        return indices
+
+    def mask(self, indices):
+        mask = np.ones(self.N, dtype = bool)
+        mask[indices,] = False
+        test_tensor = self.dna_tensor[indices, :, :]
+        train_tensor = self.dna_tensor[mask, :, :]
+        test_tar = self.tar_vec[indices]
+        train_tar = self.tar_vec[mask]
+        return train_tensor, test_tensor, train_tar, test_tar
+
+    def split_chrom(self, chrom):
+        indices = self.find_chr_index(chrom)
+        train_tensor, test_tensor, train_tar, test_tar = self.mask(indices)
+        return Data(train_tensor, test_tensor, train_tar, test_tar, chrom, indices, self)
+
+    def process_all_files(self):
+        self.tar_vecs = []
+        self.dna_tensors = []
+        self.anno_dfs = []
+        self.balance = [0,0]
+        for idx in range(len(self.dna_files)):
+            anno_df, dna_tensor, tar_vec, cur_balance = self.process_one_file(idx)
+            self.tar_vecs.append(tar_vec)
+            self.anno_dfs.append(anno_df)
+            self.dna_tensors.append(dna_tensor)
+            self.balance[0] += cur_balance[0]
+            self.balance[1] += cur_balance[1]
+        self.merged_tensor =  np.concatenate(self.dna_tensors)
+        self.merged_tar = np.concatenate(self.tar_vecs)
+        self.bin_merged_tar = self.merged_tar
+
+
+    def process_one_file(self, idx):
+        dna_file = self.dna_files[idx]
+        target_file = self.target_files[idx]
+        anno_file = self.anno_files[idx]
+        anno_df, N = self.prep_anno(anno_file)
+        status = self.status[idx]
+        dna_tensor = self.prep_dna(dna_file, N)
+        tar_vec, balance = self.prep_tar(target_file, N, status, self.type)
+        return anno_df, dna_tensor, tar_vec, balance
+
+    def prep_anno(self, anno_file):
+        anno_df = pd.read_csv(anno_file, sep = "\t", header = 0)
+        N = len(anno_df.index)
+        return anno_df, N
+
+    def prep_dna(self, dna_file, N):
+        idx = 0
+        dna_tensor = np.zeros((N, 1, 4, 150))
+        f = open(dna_file, 'r')
+        for line in f:
+            split_line = line.rstrip().split()
+            _N, _W = divmod(idx, 4)
+            dna_tensor[_N, 0, _W, :] = np.asarray(split_line, dtype = int)
+            idx += 1
+        return dna_tensor
+
+    def prep_tar(self, tar_file, N, status, type = "tanh"):
+        idx = 0
+        tar_vec = np.zeros(N)
+        f = open(tar_file, 'r')
+        balance = [0,0]
+        for line in f:
+            split_line = line.rstrip().split()
+            if type == "tanh":
+                if status == "act":
+                    val = int(split_line[0])
+                    tar_vec[idx] = val
+                    if int(val) == 1:
+                        balance[1] += 1
+                    elif int(val) == 0:
+                        balance[0] += 1
+
+                elif status == "rep":
+                    val = int(split_line[0])
+                    if val == 1:
+                        tar_vec[idx] = 1
+                        balance[1] += 1
+                    elif val == 0:
+                        tar_vec[idx] = 0
+                        balance[0] += 1
+
+            elif type == "bin":
+                if status == "act":
+                    val = int(split_line[0])
+                    tar_vec[idx] = val
+                    if int(val) == 1:
+                        balance[1] += 1
+                    elif int(val) == 0:
+                        balance[0] += 1
+
+                elif status == "rep":
+                    val = int(split_line[0])
+                    if val == 1:
+                        tar_vec[idx] = 1
+                        balance[1] += 1
+                    elif val == 0:
+                        tar_vec[idx] = 0
+                        balance[0] += 1
+            idx += 1
+        return tar_vec, balance
+
+    def bin_weights(self):
+        bal_sum = sum(self.balance)
+        neg_weight = bal_sum / float(self.balance[0])
+        pos_weight = bal_sum / float(self.balance[1])
+        return neg_weight, pos_weight
+
+
+class MultiClassProcessor(object):
+    def __init__(self, dna_files, target_files, anno_files, status, type = "cat"):
+        self.dna_files = dna_files
+        self.target_files = target_files
+        self.anno_files = anno_files
+        self.status = status
+        self.type = "cat"
+        self.process_all_files()
+
+    def return_test_train(self, test_size = 0.2):
+        sss = StratifiedShuffleSplit(n_splits=1, test_size=test_size, random_state=0)
+        if self.type == "tanh":
+            for train_index, test_index in sss.split(self.merged_tensor, self.merged_tensor):
+                X_train, X_test = self.merged_tensor[train_index], self.merged_tensor[test_index]
+                Y_train, Y_test = self.merged_tar[train_index], self.merged_tar[test_index]
+            return X_train, X_test, Y_train, Y_test
+        elif self.type == "cat":
+            self.converted_cat = to_categorical(self.merged_tar)
+            for train_index, test_index in sss.split(self.merged_tensor, self.merged_tensor):
+                X_train, X_test = self.merged_tensor[train_index], self.merged_tensor[test_index]
+                Y_train, Y_test = self.converted_cat[train_index], self.converted_cat[test_index]
+            return X_train, X_test, Y_train, Y_test
+
+    def process_all_files(self):
+        self.tar_vecs = []
+        self.dna_tensors = []
+        self.anno_dfs = []
+        self.balance = [0,0,0]
+        for idx in range(len(self.dna_files)):
+            anno_df, dna_tensor, tar_vec, cur_balance = self.process_one_file(idx)
+            self.tar_vecs.append(tar_vec)
+            self.anno_dfs.append(anno_df)
+            self.dna_tensors.append(dna_tensor)
+            self.balance[0] += cur_balance[0]
+            self.balance[1] += cur_balance[1]
+            self.balance[2] += cur_balance[2]
+        self.merged_tensor =  np.concatenate(self.dna_tensors)
+        self.merged_tar = np.concatenate(self.tar_vecs)
+        self.cat_merged_tar = to_categorical(self.merged_tar)
+
+    def process_one_file(self, idx):
+        dna_file = self.dna_files[idx]
+        target_file = self.target_files[idx]
+        anno_file = self.anno_files[idx]
+        anno_df, N = self.prep_anno(anno_file)
+        status = self.status[idx]
+        dna_tensor = self.prep_dna(dna_file, N)
+        tar_vec, balance = self.prep_tar(target_file, N, status, self.type)
+        return anno_df, dna_tensor, tar_vec, balance
+
+    def prep_anno(self, anno_file):
+        anno_df = pd.read_csv(anno_file, sep = "\t", header = 0)
+        N = len(anno_df.index)
+        return anno_df, N
+
+    def prep_dna(self, dna_file, N):
+        idx = 0
+        dna_tensor = np.zeros((N, 1, 4, 150))
+        f = open(dna_file, 'r')
+        for line in f:
+            split_line = line.rstrip().split()
+            _N, _W = divmod(idx, 4)
+            dna_tensor[_N, 0, _W, :] = np.asarray(split_line, dtype = int)
+            idx += 1
+        return dna_tensor
+
+    def prep_tar(self, tar_file, N, status, type = "tanh"):
+        idx = 0
+        tar_vec = np.zeros(N)
+        f = open(tar_file, 'r')
+        balance = [0,0,0]
+        for line in f:
+            split_line = line.rstrip().split()
+            if type == "tanh":
+                if status == "act":
+                    val = int(split_line[0])
+                    tar_vec[idx] = val
+                    if int(val) == 1:
+                        balance[2] += 1
+                    elif int(val) == 0:
+                        balance[1] += 1
+
+                elif status == "rep":
+                    val = int(split_line[0])
+                    if val == 1:
+                        tar_vec[idx] = -1
+                        balance[0] += 1
+                    elif val == 0:
+                        tar_vec[idx] = 0
+                        balance[1] += 1
+
+            elif type == "cat":
+                if status == "act":
+                    val = int(split_line[0])
+                    if val == 0:
+                        tar_vec[idx] = 1
+                        balance[1] += 1
+                    elif val == 1:
+                        tar_vec[idx] = 2
+                        balance[2] += 1
+                elif status == "rep":
+                    val = int(split_line[0])
+                    if val == 0:
+                        tar_vec[idx] = 1
+                        balance[1] += 1
+                    elif val == 1:
+                        tar_vec[idx] = 0
+                        balance[0] += 1
+            idx += 1
+        return tar_vec, balance
+
+    def continuous_weights(self):
+        bal_sum = sum(self.balance)
+        neg_weight = bal_sum / float(self.balance[0])
+        pos_weight = bal_sum / float(self.balance[2])
+        zero_weight = bal_sum / float(self.balance[1])
+        weights = np.zeros(self.merged_tar.shape[0])
+        for idx, val in enumerate(self.merged_tar):
+            if val == 1:
+                weights[idx] = pos_weight
+            elif val == -1:
+                weights[idx] = neg_weight
+            elif val == 0:
+                weights[idx] = zero_weight
+        return np.asarray(weights)
+
+    def cat_weights(self):
+        bal_sum = sum(self.balance)
+        neg_weight = bal_sum / float(self.balance[0])
+        pos_weight = bal_sum / float(self.balance[2])
+        zero_weight = bal_sum / float(self.balance[1])
+        return neg_weight, zero_weight, pos_weight
+
+if __name__ == "__main__":
+    # dna_file = sys.argv[1]
+    # target_file = sys.argv[2]
+    # anno_file = sys.argv[3]
+    # output_dir = sys.argv[4]
+    dna_files = ["/home/alvin/Dropbox/Lab/CNN/data/processed_cnn/HEPG2_act_mpra_dna.txt", "/home/alvin/Dropbox/Lab/CNN/data/processed_cnn/HEPG2_rep_mpra_dna.txt", "/home/alvin/Dropbox/Lab/CNN/data/processed_cnn/K562_act_mpra_dna.txt", "/home/alvin/Dropbox/Lab/CNN/data/processed_cnn/K562_rep_mpra_dna.txt", "/home/alvin/Dropbox/Lab/CNN/data/processed_cnn/LCL/LCL_act_mpra_dna.txt"]
+    target_files = ["/home/alvin/Dropbox/Lab/CNN/data/processed_cnn/HEPG2_act_mpra_tar.txt", "/home/alvin/Dropbox/Lab/CNN/data/processed_cnn/HEPG2_rep_mpra_tar.txt", "/home/alvin/Dropbox/Lab/CNN/data/processed_cnn/K562_act_mpra_tar.txt", "/home/alvin/Dropbox/Lab/CNN/data/processed_cnn/K562_rep_mpra_tar.txt", "/home/alvin/Dropbox/Lab/CNN/data/processed_cnn/LCL/LCL_act_mpra_tar.txt"]
+    anno_files = ["/home/alvin/Dropbox/Lab/CNN/data/processed_cnn/HEPG2_act_mpra_det.txt", "/home/alvin/Dropbox/Lab/CNN/data/processed_cnn/HEPG2_rep_mpra_det.txt", "/home/alvin/Dropbox/Lab/CNN/data/processed_cnn/K562_act_mpra_det.txt", "/home/alvin/Dropbox/Lab/CNN/data/processed_cnn/K562_rep_mpra_det.txt", "/home/alvin/Dropbox/Lab/CNN/data/processed_cnn/LCL/LCL_act_mpra_det.txt"]
+    output_dirs = ["./HEPG2_act/", "./HEPG2_rep/", "./K562_act/", "./K562_rep/", "./LCL_act/"]
+    names = ["HEPG2_act", "HEPG2_rep", "K562_act", "K562_rep", "LCL_act"]
+    status = ["act", "rep", "act", "rep", "act"]
+    multiClassObj = MultiClassProcessor(dna_files, target_files, anno_files, status, type = "cat")
+    X_train, X_test, Y_train, Y_test = multiClassObj.return_test_train()
+    modelObj = Model(verbose= 0, seq_length = 150)
+    modelObj.train(X_train, Y_train)
+    self_result_obj = modelObj.test(X_test, Y_test)
+    modelObj.train()
+    ref_file = "LCL_act_mpra_emVar_ref.txt"
+    alt_file = "LCL_act_mpra_emVar_alt.txt"
+    z_file = "LCL_act_mpra_emVar_tar.txt"
+    prob_file = "LCL_act_mpra_emVar_eft.txt"
+    det_file = "./processed_cnn/LCL_act_mpra_emVar_det.txt"
+    det_df = pd.read_csv(det_file, sep = "\t", header = 0)
+    log_det = det_df["LogSkew.Comb"]
+
+    plt.clf()
+    plt.scatter(diff_result[:,0], diff_result[:,2], c = log_det, cmap = "Blues")
+
+    # param_grid = {'num_filters': [(10,10,10), (20,20,20), (30,30,30)], 'conv_width' : [(10,10,10), (20,20,20), (30,30,30)], 'pool_width': [20],
+    #     'l1': [0, 0.01, 0.1], 'dropout' : [0, 0.1, 0.25]}
+
+    # grid = ParameterGrid(param_grid)
+    # for params in grid:
+    #     num_filters = params['num_filters']
+    #     conv_width = params['conv_width']
+    #     pool_width = params['pool_width']
+    #     L1 = params['l1']
+    #     dropout = params['dropout']
+    #     file_name = "3layer_%i_%i_%i_%0.04f_%0.03f.txt"%(num_filters[0], conv_width[0], pool_width, L1, dropout)
+    #     print(file_name)
+    #     prepare_header = "Train\tTest\tLoss\tBalanced_Accuracy\tauROC\tauPRC\tauPRG\tRecall_at_5%_FDR\tRecall_at_10%_FDR\tRecall_at_20%_FDR\tNum_Positives\tNum_Negatives\tTime\n"
+    #     grid_output_file = open(file_name, 'w')
+    #     grid_output_file.write(prepare_header)
+    #     for idx in range(len(dna_files)):
+    #         dna_file = dna_files[idx]
+    #         anno_file = anno_files[idx]
+    #         target_file = target_files[idx]
+    #         output_dir = output_dirs[idx]
+    #         name = names[idx]
+    #         initalObj = init_objs[idx]
+    #         X_true = False
+    #         if re.search("HEPG2", dna_file):
+    #             X_true = True
+    #         elif re.search("K562", dna_file):
+    #             X_true = True
+    #         all_chrom_result_objs = []
+    #         start = time.time()
+    #         for idx in range(1,3):
+    #             chrom = 'chr' + str(idx)
+    #             dataObj = initalObj.split_chrom(chrom)
+    #             modelObj = Model(verbose = 0, seq_length = 150)
+    #             modelObj.model(num_filters = num_filters, conv_width = conv_width, pool_width = pool_width, L1 = L1, dropout = dropout)
+    #             modelObj.train(dataObj.train_tensor, dataObj.train_tar)
+    #             classObj = modelObj.test(dataObj.test_tensor, dataObj.test_tar.astype(bool))
+    #             all_chrom_result_objs.append(classObj)
+    #             # header = "%s\t%s\t"%(name, chrom)
+    #             # classStr = str(classObj)
+    #             # running_time = time.time() - start
+    #             # full_str = header + classStr + "\t%0.04f"%(running_time) + "\n"
+    #             # grid_output_file.write(full_str)
+
+
+    #         if X_true:
+    #             chrom = 'chrX'
+    #             initalObj.split_chrom(chrom)
+    #             dataObj = initalObj.split_chrom(chrom)
+    #             modelObj = Model(verbose = 0, seq_length = 150)
+    #             modelObj.model(num_filters = num_filters, conv_width = conv_width, pool_width = pool_width, L1 = L1, dropout = dropout)
+    #             modelObj.train(dataObj.train_tensor, dataObj.train_tar)
+    #             classObj = modelObj.test(dataObj.test_tensor, dataObj.test_tar.astype(bool))
+    #             all_chrom_result_objs.append(classObj)
+    #             # header = "%s\t%s\t"%(name, chrom)
+    #             # classStr = str(classObj)
+    #             # running_time = time.time() - start
+    #             # full_str = header + classStr + "\t%0.04f"%(running_time) + "\n"
+    #             # grid_output_file.write(full_str)
+
+
+    #         concat_file_name = "preds_%s_%s_3layer_%i_%i_%i_%0.04f_%0.03f.txt"%(name, 'chrom', num_filters[0], conv_width[0], pool_width, L1, dropout)
+    #         overall_class_obj= process_result_objs(all_chrom_result_objs, concat_file_name)
+    #         header = "%s\t%s\t"%(name, 'all_chroms')
+    #         classStr = str(overall_class_obj)
+    #         running_time = time.time() - start
+    #         full_str = header + classStr + "\t%0.04f"%(running_time) + "\n"
+    #         grid_output_file.write(full_str)
+
+    #         for idx2, val2 in enumerate(init_objs):
+    #             if idx2 != idx:
+    #                 start = time.time()
+    #                 modelObj = Model(verbose = 0, seq_length = 150)
+    #                 modelObj.model(num_filters = num_filters, conv_width = conv_width, pool_width = pool_width, L1 = L1, dropout = dropout)
+    #                 modelObj.train(initalObj.dna_tensor, initalObj.tar_vec)
+    #                 classObj = modelObj.test(val2.dna_tensor, val2.tar_vec.astype(bool))
+    #                 header = "%s\t%s\t"%(name, val2.name)
+    #                 classStr = str(classObj)
+    #                 running_time =  time.time() - start
+    #                 full_str = header + classStr + "\t%0.04f"%(running_time) + "\n"
+    #                 grid_output_file.write(full_str)
+
+
+    #     grid_output_file.close()

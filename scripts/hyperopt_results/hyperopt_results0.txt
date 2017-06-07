@@ -1,0 +1,66 @@
+Using Theano backend.
+Using gpu device 0: TITAN X (Pascal) (CNMeM is disabled, cuDNN 5105)
+/home/alvin/anaconda2/lib/python2.7/site-packages/theano/sandbox/cuda/__init__.py:600: UserWarning: Your cuDNN version is more recent than the one Theano officially supports. If you see any problems, try updating Theano or downgrading cuDNN to version 5.
+  warnings.warn(warn)
+/home/alvin/anaconda2/lib/python2.7/site-packages/theano/tensor/signal/downsample.py:6: UserWarning: downsample module has been moved to the theano.tensor.signal.pool module.
+  "downsample module has been moved to the theano.tensor.signal.pool module.")
+/home/alvin/anaconda2/lib/python2.7/site-packages/sklearn/cross_validation.py:44: DeprecationWarning: This module was deprecated in version 0.18 in favor of the model_selection module into which all the refactored classes and functions are moved. Also note that the interface of the new CV iterators are different from that of this module. This module will be removed in 0.20.
+  "This module will be removed in 0.20.", DeprecationWarning)
+/home/alvin/anaconda2/lib/python2.7/site-packages/sklearn/grid_search.py:43: DeprecationWarning: This module was deprecated in version 0.18 in favor of the model_selection module into which all the refactored classes and functions are moved. This module will be removed in 0.20.
+  DeprecationWarning)
+starting func
+(0.24876608240172646, 1.2640021708138744e-07, 0.00010828045242030853, 0.013104232972927734, 0.06685780141431255, 13.0)
+(0.24876608240172646, 1.2640021708138744e-07, 0.00010828045242030853, 0.013104232972927734, 0.06685780141431255, 13.0)
+Starting CV NN
+0.6227	69.8696	0.7838	0.4139	0.8328	0.0062	1.2346	1.2346	1.2346	162.0000	1057.0000
+Completed NN on chromsome chr1 in 45.8360 seconds
+0.0000	69.6746	0.7790	0.4121	0.8294	0.0061	1.2270	1.2270	1.2270	163.0000	1057.0000
+0.6198	70.8556	0.7616	0.4487	0.8737	0.0006	6.0188	9.9060	14.8589	1595.0000	11398.0000
+Completed predicting on K562 in 55.65 seconds
+Printing result obj
+0.6198	70.8556	0.7616	0.4487	0.8737	0.0006	6.0188	9.9060	14.8589	1595.0000	11398.0000
+[('Loss', 0.61976058546421497), ('Balanced_accuracy', 70.855633254692975), ('auROC', 0.76156180950185948), ('auPRC', 0.44873357044996698), ('auPRG', 0.87368673487401161), ('Senstivity_at_5%_FPR', 0.00062695924764890286), ('Recall_at_5%_FDR', 6.0188087774294674), ('Recall_at_10%_FDR', 9.9059561128526656), ('Recall_at_20%_FDR', 14.858934169278998), ('Num_Positives', 1595), ('Num_Negatives', 11398)]
+0.6407	60.7848	0.6500	0.2776	0.6550	0.0004	0.1444	0.1444	0.1805	2770.0000	18100.0000
+Completed predicting on LCL in 56.71 seconds
+Printing result obj
+0.6407	60.7848	0.6500	0.2776	0.6550	0.0004	0.1444	0.1444	0.1805	2770.0000	18100.0000
+[('Loss', 0.64070333623913678), ('Balanced_accuracy', 60.784839539661327), ('auROC', 0.65000318128328383), ('auPRC', 0.27761018572670415), ('auPRG', 0.65495000892052446), ('Senstivity_at_5%_FPR', 0.00036101083032490973), ('Recall_at_5%_FDR', 0.1444043321299639), ('Recall_at_10%_FDR', 0.1444043321299639), ('Recall_at_20%_FDR', 0.18050541516245489), ('Num_Positives', 2770), ('Num_Negatives', 18100)]
+Exception
+tuple indices must be integers, not str
+starting func
+(0.2372946282175143, 0.001177303169863999, 2.0757960998153378e-07, 7.061227118479207, 1.001764006576746e-06, 19.0)
+(0.2372946282175143, 0.001177303169863999, 2.0757960998153378e-07, 7.061227118479207, 1.001764006576746e-06, 19.0)
+Starting CV NN
+0.6723	66.8375	0.7087	0.3776	0.7789	0.0062	4.9383	5.5556	9.2593	162.0000	1057.0000
+Completed NN on chromsome chr1 in 46.5031 seconds
+0.7001	66.6500	0.7043	0.3761	0.7745	0.0061	4.9080	5.5215	9.2025	163.0000	1057.0000
+0.5240	73.2341	0.7962	0.4923	0.9008	0.0006	4.3260	9.5925	18.4326	1595.0000	11398.0000
+Completed predicting on K562 in 39.88 seconds
+Printing result obj
+0.5240	73.2341	0.7962	0.4923	0.9008	0.0006	4.3260	9.5925	18.4326	1595.0000	11398.0000
+[('Loss', 0.52402660432262049), ('Balanced_accuracy', 73.234128959543582), ('auROC', 0.79622575813498597), ('auPRC', 0.49234741037783042), ('auPRG', 0.90082177716682998), ('Senstivity_at_5%_FPR', 0.00062695924764890286), ('Recall_at_5%_FDR', 4.3260188087774294), ('Recall_at_10%_FDR', 9.592476489028213), ('Recall_at_20%_FDR', 18.432601880877744), ('Num_Positives', 1595), ('Num_Negatives', 11398)]
+0.6040	58.2385	0.6374	0.2595	0.6159	0.0004	0.0722	0.0722	0.0722	2770.0000	18100.0000
+Completed predicting on LCL in 32.98 seconds
+Printing result obj
+0.6040	58.2385	0.6374	0.2595	0.6159	0.0004	0.0722	0.0722	0.0722	2770.0000	18100.0000
+[('Loss', 0.60403687872481338), ('Balanced_accuracy', 58.23846660151186), ('auROC', 0.63743316313301557), ('auPRC', 0.2594715751050003), ('auPRG', 0.61585047815136884), ('Senstivity_at_5%_FPR', 0.00036101083032490973), ('Recall_at_5%_FDR', 0.072202166064981949), ('Recall_at_10%_FDR', 0.072202166064981949), ('Recall_at_20%_FDR', 0.072202166064981949), ('Num_Positives', 2770), ('Num_Negatives', 18100)]
+Exception
+tuple indices must be integers, not str
+Traceback (most recent call last):
+  File "hyperopt_wrapper.py", line 90, in <module>
+    best = fmin(func, space=spaces,algo=tpe.suggest,max_evals=2, trials=trials)
+  File "/home/alvin/anaconda2/lib/python2.7/site-packages/hyperopt/fmin.py", line 307, in fmin
+    return_argmin=return_argmin,
+  File "/home/alvin/anaconda2/lib/python2.7/site-packages/hyperopt/base.py", line 635, in fmin
+    return_argmin=return_argmin)
+  File "/home/alvin/anaconda2/lib/python2.7/site-packages/hyperopt/fmin.py", line 322, in fmin
+    return trials.argmin
+  File "/home/alvin/anaconda2/lib/python2.7/site-packages/hyperopt/base.py", line 590, in argmin
+    best_trial = self.best_trial
+  File "/home/alvin/anaconda2/lib/python2.7/site-packages/hyperopt/base.py", line 585, in best_trial
+    best = np.argmin(losses)
+  File "/home/alvin/anaconda2/lib/python2.7/site-packages/numpy/core/fromnumeric.py", line 1032, in argmin
+    return _wrapit(a, 'argmin', axis, out)
+  File "/home/alvin/anaconda2/lib/python2.7/site-packages/numpy/core/fromnumeric.py", line 47, in _wrapit
+    result = getattr(asarray(obj), method)(*args, **kwds)
+ValueError: attempt to get argmin of an empty sequence

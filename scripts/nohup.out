@@ -1,0 +1,4 @@
+  File "mnist_parallelization_test.py", line 89
+    models[0].fit(x_train, y_train, batch_size=batch_size, epochs=epochs, verbose=2, validation_data=(x_test, y_test), callbacks=[callback])
+                                                                                                                                           ^
+IndentationError: unindent does not match any outer indentation level

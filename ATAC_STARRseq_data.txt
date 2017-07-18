@@ -1,0 +1,22 @@
+ATAC-STARR seq data
+
+In /home/unix/xinchen/ATAC_STARRdata
+ATACSTARR_GM12878Lib_*_merged.txt - Raw read counts for all fragments. First five columns are plasmid DNA controls, last five columns are the number of RNA reads.
+ATACSTARR_GM12878Lib_*_merged_0.1RPM_counts.txt - Raw read counts for fragments with >0.1 reads per million in DNA and RNA samples
+ATACSTARR_GM12878Lib_*_merged_RPM_0.1RPM.txt_output.txt - Processed data with, among other things, ratios of DNA to RNA.
+
+In /broad/compbio/liang/for_Xinchen
+sharpr2-manual.pdf* contains format and descriptions of the following file:
+
+/ForLiangATACSTARR_GM12878Lib_150_600_merged_0.2RPM_RNAtoDNA_FC_result/ForLiangATACSTARR_GM12878Lib_150_600_merged_0.2RPM_RNAtoDNA_FC_result_alpha005_exact_rev.RData
+contains the SHARPR scores for the ATACSTARR sequences, run on the final processed version (ATACSTARR output.txt)
+
+Data structure of R file:
+whole_re[[i]], i=chr - returned object
+	       relevant returned values:
+	       	       n_reg: number of regulatory regions (~50k)
+	       	       region: (_, _, _, ) - coordinates of the region
+		       score: the actual relevant SHARPR score for the tile region
+		       	      est_a(locus regulatory scores), sd_e, lambda (ridge coeff)
+		      
+	       

@@ -33,7 +33,8 @@ for d in ['/gpu:0', '/gpu:1']:
             X_train = np.transpose(np.array(trainmat['trainxdata']),axes=(2,0,1))
             y_train = np.array(trainmat['traindata']).T
 
-
+            print (X_train.shape, y_train.shape)
+            print (y_train[0])
             #building model
             model = Sequential()
 
